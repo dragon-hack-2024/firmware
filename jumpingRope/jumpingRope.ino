@@ -12,11 +12,11 @@ bool deviceConnected = false;
 bool oldDeviceConnected = false;
 uint32_t value = 0;
 
-// See the following for generating UUIDs:
-// https://www.uuidgenerator.net/
-
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHAR1_UUID          "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+#define INTERRUPT_PIN 15  // GPIO pin used for the interrupt (replace with actual pin)
+volatile bool notifyFlag = false;
 
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
@@ -29,6 +29,15 @@ class MyServerCallbacks: public BLEServerCallbacks {
       Serial.println("Disconnected");
     }
 };
+
+void IRAM_ATTR onHighEdge() {
+  static unsigned long lastInterruptTime = 0;
+  unsigned long interruptTime = millis();
+  if (interruptTime - lastInterruptTime > 200) {
+    lastInterruptTime = interruptTime;
+    notifyFlag = true;
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -56,8 +65,6 @@ void setup() {
   
   pBLE2902 = new BLE2902();
   pBLE2902->setNotifications(true);
-  
-  // Add all Descriptors here
   pCharacteristic->addDescriptor(pBLE2902);
   
   // Start the service
@@ -70,26 +77,32 @@ void setup() {
   pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
   BLEDevice::startAdvertising();
   Serial.println("Waiting a client connection to notify...");
+
+  // Configure the interrupt pin
+  pinMode(INTERRUPT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), onHighEdge, RISING);
 }
 
 void loop() {
-    // notify changed value
-    if (deviceConnected) {
-        pCharacteristic->setValue(value);
-        pCharacteristic->notify();
-        value++;
-        delay(1000);
+    // Handle notification if interrupt flag is set
+    if (notifyFlag) {
+      Serial.println("tick");
+      if (deviceConnected) {
+          pCharacteristic->setValue(value);
+          pCharacteristic->notify();
+          value++;
+      }
+      notifyFlag = false;  // Reset the flag after handling
     }
-    // disconnecting
+
+    // Handle connection and disconnection events
     if (!deviceConnected && oldDeviceConnected) {
         delay(500); // give the bluetooth stack the chance to get things ready
         pServer->startAdvertising(); // restart advertising
         Serial.println("start advertising");
         oldDeviceConnected = deviceConnected;
     }
-    // connecting
     if (deviceConnected && !oldDeviceConnected) {
-        // do stuff here on connecting
         oldDeviceConnected = deviceConnected;
     }
 }
